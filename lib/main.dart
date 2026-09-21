@@ -9,6 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter/cupertino.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +23,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'UV Index',
+      title: 'SunCheck',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         textTheme: GoogleFonts.poppinsTextTheme(),
@@ -424,68 +425,125 @@ class _UVScreenState extends State<UVScreen> {
                   color: Theme.of(context).scaffoldBackgroundColor,
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('Notification Settings', style: Theme.of(context).textTheme.titleLarge),
-                    const SizedBox(height: 16),
-                    SwitchListTile(
-                      title: const Text('Daily reminder'),
-                      value: notificationsEnabled,
-                      onChanged: (value) {
-                        setModalState(() => notificationsEnabled = value);
-                        setState(() => notificationsEnabled = value);
-                      },
-                    ),
-                    ListTile(
-                      title: const Text('Notification time'),
-                      trailing: Text(notificationTime.format(context)),
-                      onTap: () async {
-                        final picked = await showTimePicker(
-                          context: context,
-                          initialTime: notificationTime,
-                        );
-                        if (picked != null) {
-                          setModalState(() => notificationTime = picked);
-                          setState(() => notificationTime = picked);
-                        }
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      onPressed: () async {
-                        await _saveSettings();
-                        try {
-                          if (notificationsEnabled) {
-                            final todayUV = getUVByDay()[1];
-                            final todayTimes = getTimesByDay()[1];
-                            final message = getUVMessage(todayUV, todayTimes);
-                            print('Scheduling notification: "$message" at ${notificationTime.hour}:${notificationTime.minute}');
-                            await scheduleUVNotification(
-                              message,
-                              notificationTime.hour,
-                              notificationTime.minute,
-                            );
-                            print('Notification scheduled successfully');
-                            await checkPendingNotifications();
-                          } else {
-                            await notificationsPlugin.cancelAll();
-                          }
-                        } catch (e) {
-                          print('Error scheduling notification: $e');
-                        }
-                        if (context.mounted) Navigator.pop(context);
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFFECB3),
-                        foregroundColor: Colors.black87,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
+                child: SafeArea(
+                  top: false,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('Notification Settings', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 16),
+                      SwitchListTile(
+                        title: const Text('Daily reminder'),
+                        value: notificationsEnabled,
+                        onChanged: (value) {
+                          setModalState(() => notificationsEnabled = value);
+                          setState(() => notificationsEnabled = value);
+                        },
                       ),
-                      child: const Text('Save'),
-                    ),
-                  ],
+                      ListTile(
+                        title: const Text('Notification time'),
+                        trailing: Text(notificationTime.format(context)),
+                        onTap: () async {
+                          int selectedHour = notificationTime.hour;
+                          int selectedMinute = notificationTime.minute;
+
+                          await showModalBottomSheet(
+                            context: context,
+                            backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+                            builder: (context) {
+                              return SafeArea(
+                                top: false,
+                                child: SizedBox(
+                                  height: 250,
+                                  child: Column(
+                                    children: [
+                                      Expanded(
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: CupertinoPicker(
+                                                scrollController: FixedExtentScrollController(initialItem: selectedHour),
+                                                itemExtent: 40,
+                                                onSelectedItemChanged: (index) {
+                                                  selectedHour = index;
+                                                },
+                                                children: List.generate(24, (i) => Center(child: Text(i.toString().padLeft(2, '0')))),
+                                              ),
+                                            ),
+                                            const Text(':', style: TextStyle(fontSize: 20)),
+                                            Expanded(
+                                              child: CupertinoPicker(
+                                                scrollController: FixedExtentScrollController(initialItem: selectedMinute),
+                                                itemExtent: 40,
+                                                onSelectedItemChanged: (index) {
+                                                  selectedMinute = index;
+                                                },
+                                                children: List.generate(60, (i) => Center(child: Text(i.toString().padLeft(2, '0')))),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.all(12.0),
+                                        child: ElevatedButton(
+                                          onPressed: () {
+                                            final picked = TimeOfDay(hour: selectedHour, minute: selectedMinute);
+                                            setModalState(() => notificationTime = picked);
+                                            setState(() => notificationTime = picked);
+                                            Navigator.pop(context);
+                                          },
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: const Color(0xFFFFECB3),
+                                            foregroundColor: Colors.black87,
+                                          ),
+                                          child: const Text('Done'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: () async {
+                          await _saveSettings();
+                          try {
+                            if (notificationsEnabled) {
+                              final todayUV = getUVByDay()[1];
+                              final todayTimes = getTimesByDay()[1];
+                              final message = getUVMessage(todayUV, todayTimes);
+                              print('Scheduling notification: "$message" at ${notificationTime.hour}:${notificationTime.minute}');
+                              await scheduleUVNotification(
+                                message,
+                                notificationTime.hour,
+                                notificationTime.minute,
+                              );
+                              print('Notification scheduled successfully');
+                              await checkPendingNotifications();
+                            } else {
+                              await notificationsPlugin.cancelAll();
+                            }
+                          } catch (e) {
+                            print('Error scheduling notification: $e');
+                          }
+                          if (context.mounted) Navigator.pop(context);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFFFECB3),
+                          foregroundColor: Colors.black87,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: const Text('Save'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             );
