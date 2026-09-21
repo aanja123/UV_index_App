@@ -77,6 +77,7 @@ final FlutterLocalNotificationsPlugin notificationsPlugin =
 
 Future<void> initNotifications() async {
   tzdata.initializeTimeZones();
+  tz.setLocalLocation(tz.getLocation('Europe/Ljubljana'));
 
   const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
   const initSettings = InitializationSettings(android: androidSettings);
@@ -99,7 +100,7 @@ Future<void> scheduleUVNotification(String message, int hour, int minute) async 
   if (scheduledDate.isBefore(now)) {
     scheduledDate = scheduledDate.add(const Duration(days: 1));
   }
-
+  print('Final scheduled date: $scheduledDate (now: $now)');
   await notificationsPlugin.zonedSchedule(
     0,
     'UV Index Update',
@@ -114,10 +115,34 @@ Future<void> scheduleUVNotification(String message, int hour, int minute) async 
         priority: Priority.high,
       ),
     ),
-    androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+    androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
     uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-    matchDateTimeComponents: DateTimeComponents.time,
   );
+}
+
+Future<void> showTestNotification() async {
+  await notificationsPlugin.show(
+    1,
+    'Test',
+    'If you see this, notifications work!',
+    const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'uv_channel',
+        'UV Notifications',
+        channelDescription: 'Daily UV index reminder',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    ),
+  );
+}
+
+Future<void> checkPendingNotifications() async {
+  final pending = await notificationsPlugin.pendingNotificationRequests();
+  print('Pending notifications: ${pending.length}');
+  for (var p in pending) {
+    print('ID: ${p.id}, Title: ${p.title}, Body: ${p.body}');
+  }
 }
 
 class UVScreen extends StatefulWidget {
@@ -136,10 +161,19 @@ class _UVScreenState extends State<UVScreen> {
   final TextEditingController searchController = TextEditingController();
   List<Map<String, dynamic>> searchResults = [];
   Timer? _debounce;
+  bool notificationsEnabled = false;
+  TimeOfDay notificationTime = const TimeOfDay(hour: 8, minute: 0);
+  String currentLocationName = 'Ljubljana';
 
   @override
   void initState() {
     super.initState();
+    _initApp();
+    //showTestNotification();
+  }
+
+  Future<void> _initApp() async {
+    await _loadSettings();
     _loadUVData();
   }
 
@@ -204,13 +238,16 @@ class _UVScreenState extends State<UVScreen> {
 
     final position = await Geolocator.getCurrentPosition();
     print('GPS location: lat=${position.latitude}, lon=${position.longitude}');
+    final locationName = await reverseGeocode(position.latitude, position.longitude);
 
     setState(() {
       latitude = position.latitude;
       longitude = position.longitude;
+      currentLocationName = locationName;
       loadingLocation = false;
     });
 
+    _saveLocation();
     _loadUVData();
   }
 
@@ -227,10 +264,29 @@ class _UVScreenState extends State<UVScreen> {
     setState(() {
       latitude = city['latitude'];
       longitude = city['longitude'];
+      currentLocationName = city['name'];
       searchResults = [];
       searchController.clear();
     });
+    _saveLocation();
     _loadUVData();
+  }
+
+  Future<String> reverseGeocode(double lat, double lon) async {
+    final url = Uri.parse(
+      'https://nominatim.openstreetmap.org/reverse'
+      '?lat=$lat&lon=$lon&format=json',
+    );
+
+    final response = await http.get(url, headers: {'User-Agent': 'uv_index_app'});
+
+    if (response.statusCode == 200) {
+      final result = jsonDecode(response.body);
+      final address = result['address'];
+      return address['city'] ?? address['town'] ?? address['village'] ?? 'Unknown location';
+    } else {
+      return 'Unknown location';
+    }
   }
 
   void _onSearchChanged(String query) {
@@ -264,6 +320,34 @@ class _UVScreenState extends State<UVScreen> {
 
     return 'Max UV index today is ${maxUV.toStringAsFixed(1)}. '
         'Wear sunscreen from $startHour:00 to $endHour:00.';
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      notificationsEnabled = prefs.getBool('notificationsEnabled') ?? false;
+      final savedHour = prefs.getInt('notificationHour') ?? 8;
+      final savedMinute = prefs.getInt('notificationMinute') ?? 0;
+      notificationTime = TimeOfDay(hour: savedHour, minute: savedMinute);
+
+      latitude = prefs.getDouble('latitude') ?? 46.05;
+      longitude = prefs.getDouble('longitude') ?? 14.51;
+      currentLocationName = prefs.getString('locationName') ?? 'Ljubljana';
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('notificationsEnabled', notificationsEnabled);
+    await prefs.setInt('notificationHour', notificationTime.hour);
+    await prefs.setInt('notificationMinute', notificationTime.minute);
+  }
+
+  Future<void> _saveLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('latitude', latitude);
+    await prefs.setDouble('longitude', longitude);
+    await prefs.setString('locationName', currentLocationName);
   }
 
   void _showTableSheet(BuildContext context, List<String> times, List<double> uvValues) {
@@ -325,6 +409,92 @@ class _UVScreenState extends State<UVScreen> {
     );
   }
 
+  void _showSettingsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).scaffoldBackgroundColor,
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Notification Settings', style: Theme.of(context).textTheme.titleLarge),
+                    const SizedBox(height: 16),
+                    SwitchListTile(
+                      title: const Text('Daily reminder'),
+                      value: notificationsEnabled,
+                      onChanged: (value) {
+                        setModalState(() => notificationsEnabled = value);
+                        setState(() => notificationsEnabled = value);
+                      },
+                    ),
+                    ListTile(
+                      title: const Text('Notification time'),
+                      trailing: Text(notificationTime.format(context)),
+                      onTap: () async {
+                        final picked = await showTimePicker(
+                          context: context,
+                          initialTime: notificationTime,
+                        );
+                        if (picked != null) {
+                          setModalState(() => notificationTime = picked);
+                          setState(() => notificationTime = picked);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton(
+                      onPressed: () async {
+                        await _saveSettings();
+                        try {
+                          if (notificationsEnabled) {
+                            final todayUV = getUVByDay()[1];
+                            final todayTimes = getTimesByDay()[1];
+                            final message = getUVMessage(todayUV, todayTimes);
+                            print('Scheduling notification: "$message" at ${notificationTime.hour}:${notificationTime.minute}');
+                            await scheduleUVNotification(
+                              message,
+                              notificationTime.hour,
+                              notificationTime.minute,
+                            );
+                            print('Notification scheduled successfully');
+                            await checkPendingNotifications();
+                          } else {
+                            await notificationsPlugin.cancelAll();
+                          }
+                        } catch (e) {
+                          print('Error scheduling notification: $e');
+                        }
+                        if (context.mounted) Navigator.pop(context);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFECB3),
+                        foregroundColor: Colors.black87,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Save'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (data == null) {
@@ -337,6 +507,12 @@ class _UVScreenState extends State<UVScreen> {
     final dayTimes = timesByDay[selectedDay];
 
     return Scaffold(
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => _showSettingsSheet(context),
+        backgroundColor: const Color(0xFFFFECB3),
+        foregroundColor: Colors.black87,
+        child: const Icon(Icons.settings),
+      ),
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
@@ -393,6 +569,12 @@ class _UVScreenState extends State<UVScreen> {
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      currentLocationName,
+                      style: Theme.of(context).textTheme.titleMedium,
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
                     SegmentedButton<int>(
