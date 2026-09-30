@@ -10,9 +10,106 @@ import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:workmanager/workmanager.dart';
+
+@pragma('vm:entry-point')
+void callbackDispatcher() {
+  Workmanager().executeTask((task, inputData) async {
+    print('Background task started: $task');
+
+    try {
+      await runDailyUVCheck();
+      return Future.value(true);
+    } catch (e) {
+      print('Background task error: $e');
+      return Future.value(false);
+    }
+  });
+}
+
+Future<void> runDailyUVCheck() async {
+  print('Starting daily UV check...');
+
+  // Temporary test location
+  const latitude = 45.9715002;
+  const longitude = 13.6500471;
+
+  print('Fetching UV data...');
+
+  final uvData = await fetchUVData(latitude, longitude);
+
+  final uvValues = (uvData['hourly']['uv_index'] as List)
+      .map((value) => (value as num).toDouble())
+      .toList();
+
+  final times = (uvData['hourly']['time'] as List).cast<String>();
+
+  final todayUV = uvValues.sublist(24, 48);
+  final todayTimes = times.sublist(24, 48);
+
+  final maxUV = todayUV.reduce((a, b) => a > b ? a : b);
+
+  String message;
+
+  if (maxUV < 3) {
+    message = 'UV index is below 3 all day. No need for sunscreen.';
+  } else {
+    final firstIndex = todayUV.indexWhere((uv) => uv >= 3);
+    final lastIndex = todayUV.lastIndexWhere((uv) => uv >= 3);
+
+    final startHour =
+        todayTimes[firstIndex].split('T')[1].substring(0, 2);
+
+    final endHour =
+        todayTimes[lastIndex].split('T')[1].substring(0, 2);
+
+    if (firstIndex == lastIndex) {
+      message =
+          'Max UV index today is ${maxUV.toStringAsFixed(1)}. '
+          'Wear sunscreen at $startHour:00.';
+    } else {
+      message =
+          'Max UV index today is ${maxUV.toStringAsFixed(1)}. '
+          'Wear sunscreen from $startHour:00 to $endHour:00.';
+    }
+  }
+
+  print('Final notification message: $message');
+
+  final plugin = FlutterLocalNotificationsPlugin();
+
+  const androidSettings =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+
+  const settings = InitializationSettings(
+    android: androidSettings,
+  );
+
+  await plugin.initialize(settings);
+
+  await plugin.show(
+    999,
+    'UV Index Update',
+    message,
+    const NotificationDetails(
+      android: AndroidNotificationDetails(
+        'uv_channel',
+        'UV Notifications',
+        channelDescription: 'Daily UV index reminder',
+        importance: Importance.max,
+        priority: Priority.max,
+      ),
+    ),
+  );
+
+  print('Background UV notification shown.');
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Workmanager().initialize(
+    callbackDispatcher,
+  );
   await initNotifications();
   runApp(const MyApp());
 }
@@ -76,6 +173,8 @@ Future<List<Map<String, dynamic>>> searchCity(String query) async {
 final FlutterLocalNotificationsPlugin notificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+const String uvDailyTaskName = 'uvDailyTask';
+
 Future<void> initNotifications() async {
   tzdata.initializeTimeZones();
   tz.setLocalLocation(tz.getLocation('Europe/Ljubljana'));
@@ -88,6 +187,38 @@ Future<void> initNotifications() async {
   final androidPlugin = notificationsPlugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
   await androidPlugin?.requestNotificationsPermission();
   await androidPlugin?.requestExactAlarmsPermission();
+}
+
+Future<void> scheduleDailyUVCheck(
+  int hour,
+  int minute,
+) async {
+  await Workmanager().cancelByUniqueName(uvDailyTaskName);
+
+  final now = DateTime.now();
+
+  var nextRun = DateTime(
+    now.year,
+    now.month,
+    now.day,
+    hour,
+    minute,
+  );
+
+  if (!nextRun.isAfter(now)) {
+    nextRun = nextRun.add(const Duration(days: 1));
+  }
+
+  final delay = nextRun.difference(now);
+
+  print('Scheduling daily UV check for: $nextRun');
+  print('Initial delay: $delay');
+
+  await Workmanager().registerOneOffTask(
+    uvDailyTaskName,
+    uvDailyTaskName,
+    initialDelay: delay,
+  );
 }
 
 Future<void> scheduleUVNotification(String message, int hour, int minute) async {
@@ -514,18 +645,19 @@ class _UVScreenState extends State<UVScreen> {
                           await _saveSettings();
                           try {
                             if (notificationsEnabled) {
-                              final todayUV = getUVByDay()[1];
-                              final todayTimes = getTimesByDay()[1];
-                              final message = getUVMessage(todayUV, todayTimes);
-                              print('Scheduling notification: "$message" at ${notificationTime.hour}:${notificationTime.minute}');
-                              await scheduleUVNotification(
-                                message,
+                              print(
+                                'Scheduling daily UV check at '
+                                '${notificationTime.hour}:${notificationTime.minute}',
+                              );
+
+                              await scheduleDailyUVCheck(
                                 notificationTime.hour,
                                 notificationTime.minute,
                               );
-                              print('Notification scheduled successfully');
-                              await checkPendingNotifications();
+
+                              print('Daily UV check scheduled');
                             } else {
+                              await Workmanager().cancelByUniqueName(uvDailyTaskName);
                               await notificationsPlugin.cancelAll();
                             }
                           } catch (e) {

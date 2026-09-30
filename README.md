@@ -25,7 +25,7 @@ A simple Flutter app that shows the UV index for your location so you know exact
 1. Install [Flutter](https://docs.flutter.dev/get-started/install) and make sure `flutter doctor` runs clean.
 2. Clone this repo:
    ```
-   git clone https://github.com/yourusername/uv-index-app.git
+   git clone https://github.com/aanja123/uv-index-app.git
    cd uv-index-app
    ```
 3. Get the dependencies:
