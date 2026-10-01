@@ -30,58 +30,105 @@ void callbackDispatcher() {
 Future<void> runDailyUVCheck() async {
   print('Starting daily UV check...');
 
-  // Temporary test location
-  const latitude = 45.9715002;
-  const longitude = 13.6500471;
+  final prefs = await SharedPreferences.getInstance();
+
+  final notificationsEnabled =
+      prefs.getBool('notificationsEnabled') ?? false;
+
+  if (!notificationsEnabled) {
+    print('Notifications are disabled.');
+    return;
+  }
+
+  final latitude =
+      prefs.getDouble('notificationLatitude');
+
+  final longitude =
+      prefs.getDouble('notificationLongitude');
+
+  final locationName =
+      prefs.getString('notificationLocationName') ??
+          'Unknown location';
+
+  if (latitude == null || longitude == null) {
+    print('Notification location is not configured.');
+    return;
+  }
+
+  print(
+    'Notification location: $locationName '
+    '($latitude, $longitude)',
+  );
 
   print('Fetching UV data...');
 
-  final uvData = await fetchUVData(latitude, longitude);
+  final uvData = await fetchUVData(
+    latitude,
+    longitude,
+  );
 
-  final uvValues = (uvData['hourly']['uv_index'] as List)
-      .map((value) => (value as num).toDouble())
-      .toList();
+  final uvValues =
+      (uvData['hourly']['uv_index'] as List)
+          .map((value) => (value as num).toDouble())
+          .toList();
 
-  final times = (uvData['hourly']['time'] as List).cast<String>();
+  final times =
+      (uvData['hourly']['time'] as List).cast<String>();
 
   final todayUV = uvValues.sublist(24, 48);
   final todayTimes = times.sublist(24, 48);
 
-  final maxUV = todayUV.reduce((a, b) => a > b ? a : b);
+  final maxUV =
+      todayUV.reduce((a, b) => a > b ? a : b);
 
   String message;
 
   if (maxUV < 3) {
-    message = 'UV index is below 3 all day. No need for sunscreen.';
+    message =
+        'UV index is below 3 all day. No need for sunscreen.';
   } else {
-    final firstIndex = todayUV.indexWhere((uv) => uv >= 3);
-    final lastIndex = todayUV.lastIndexWhere((uv) => uv >= 3);
+    final firstIndex =
+        todayUV.indexWhere((uv) => uv >= 3);
+
+    final lastIndex =
+        todayUV.lastIndexWhere((uv) => uv >= 3);
 
     final startHour =
-        todayTimes[firstIndex].split('T')[1].substring(0, 2);
+        todayTimes[firstIndex]
+            .split('T')[1]
+            .substring(0, 2);
 
     final endHour =
-        todayTimes[lastIndex].split('T')[1].substring(0, 2);
+        todayTimes[lastIndex]
+            .split('T')[1]
+            .substring(0, 2);
 
     if (firstIndex == lastIndex) {
       message =
-          'Max UV index today is ${maxUV.toStringAsFixed(1)}. '
+          'Max UV index today is '
+          '${maxUV.toStringAsFixed(1)}. '
           'Wear sunscreen at $startHour:00.';
     } else {
       message =
-          'Max UV index today is ${maxUV.toStringAsFixed(1)}. '
-          'Wear sunscreen from $startHour:00 to $endHour:00.';
+          'Max UV index today is '
+          '${maxUV.toStringAsFixed(1)}. '
+          'Wear sunscreen from '
+          '$startHour:00 to $endHour:00.';
     }
   }
 
   print('Final notification message: $message');
 
-  final plugin = FlutterLocalNotificationsPlugin();
+  final plugin =
+      FlutterLocalNotificationsPlugin();
 
   const androidSettings =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
+      AndroidInitializationSettings(
+    '@mipmap/ic_launcher',
+  );
 
-  const settings = InitializationSettings(
+  const settings =
+      InitializationSettings(
     android: androidSettings,
   );
 
@@ -89,13 +136,14 @@ Future<void> runDailyUVCheck() async {
 
   await plugin.show(
     999,
-    'UV Index Update',
+    'UV Index — $locationName',
     message,
     const NotificationDetails(
       android: AndroidNotificationDetails(
         'uv_channel',
         'UV Notifications',
-        channelDescription: 'Daily UV index reminder',
+        channelDescription:
+            'Daily UV index reminder',
         importance: Importance.max,
         priority: Priority.max,
       ),
@@ -296,6 +344,14 @@ class _UVScreenState extends State<UVScreen> {
   bool notificationsEnabled = false;
   TimeOfDay notificationTime = const TimeOfDay(hour: 8, minute: 0);
   String currentLocationName = 'Ljubljana';
+  String notificationLocationName = 'Ljubljana';
+  double notificationLatitude = 46.05;
+  double notificationLongitude = 14.51;
+
+  final TextEditingController notificationSearchController =
+      TextEditingController();
+
+  List<Map<String, dynamic>> notificationSearchResults = [];
 
   @override
   void initState() {
@@ -404,6 +460,30 @@ class _UVScreenState extends State<UVScreen> {
     _loadUVData();
   }
 
+  Future<void> _searchNotificationCity(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => notificationSearchResults = []);
+      return;
+    }
+
+    final results = await searchCity(query);
+
+    setState(() {
+      notificationSearchResults = results;
+    });
+  }
+
+  void _selectNotificationCity(Map<String, dynamic> city) {
+    setState(() {
+      notificationLatitude = (city['latitude'] as num).toDouble();
+      notificationLongitude = (city['longitude'] as num).toDouble();
+      notificationLocationName = city['name'];
+
+      notificationSearchResults = [];
+      notificationSearchController.clear();
+    });
+  }
+
   Future<String> reverseGeocode(double lat, double lon) async {
     final url = Uri.parse(
       'https://nominatim.openstreetmap.org/reverse'
@@ -461,6 +541,9 @@ class _UVScreenState extends State<UVScreen> {
       final savedHour = prefs.getInt('notificationHour') ?? 8;
       final savedMinute = prefs.getInt('notificationMinute') ?? 0;
       notificationTime = TimeOfDay(hour: savedHour, minute: savedMinute);
+      notificationLocationName = prefs.getString('notificationLocationName') ?? 'Ljubljana';
+      notificationLatitude = prefs.getDouble('notificationLatitude') ?? 46.05;
+      notificationLongitude = prefs.getDouble('notificationLongitude') ?? 14.51;
 
       latitude = prefs.getDouble('latitude') ?? 46.05;
       longitude = prefs.getDouble('longitude') ?? 14.51;
@@ -470,9 +553,25 @@ class _UVScreenState extends State<UVScreen> {
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
+
     await prefs.setBool('notificationsEnabled', notificationsEnabled);
     await prefs.setInt('notificationHour', notificationTime.hour);
     await prefs.setInt('notificationMinute', notificationTime.minute);
+
+    await prefs.setString(
+      'notificationLocationName',
+      notificationLocationName,
+    );
+
+    await prefs.setDouble(
+      'notificationLatitude',
+      notificationLatitude,
+    );
+
+    await prefs.setDouble(
+      'notificationLongitude',
+      notificationLongitude,
+    );
   }
 
   Future<void> _saveLocation() async {
@@ -634,6 +733,107 @@ class _UVScreenState extends State<UVScreen> {
                                     ],
                                   ),
                                 ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                      ListTile(
+                        title: const Text('Notification location'),
+                        subtitle: Text(notificationLocationName),
+                        trailing: const Icon(Icons.location_on),
+                        onTap: () async {
+                          await showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor:
+                                Theme.of(context).scaffoldBackgroundColor,
+                            builder: (context) {
+                              return StatefulBuilder(
+                                builder: (context, setLocationModalState) {
+                                  return SafeArea(
+                                    top: false,
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: SizedBox(
+                                        height: 500,
+                                        child: Column(
+                                          children: [
+                                            Text(
+                                              'Notification location',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleLarge,
+                                            ),
+
+                                            const SizedBox(height: 16),
+
+                                            TextField(
+                                              controller:
+                                                  notificationSearchController,
+                                              decoration: const InputDecoration(
+                                                hintText: 'Search city...',
+                                                prefixIcon:
+                                                    Icon(Icons.search),
+                                                border: OutlineInputBorder(),
+                                              ),
+                                              onChanged: (query) async {
+                                                if (query.trim().length < 3) {
+                                                  setLocationModalState(() {
+                                                    notificationSearchResults = [];
+                                                  });
+                                                  return;
+                                                }
+
+                                                final results =
+                                                    await searchCity(query);
+
+                                                setLocationModalState(() {
+                                                  notificationSearchResults =
+                                                      results;
+                                                });
+                                              },
+                                            ),
+
+                                            const SizedBox(height: 12),
+
+                                            Expanded(
+                                              child: ListView(
+                                                children:
+                                                    notificationSearchResults
+                                                        .map((city) {
+                                                  final label =
+                                                      city['admin1'] != null
+                                                          ? '${city['name']}, '
+                                                            '${city['admin1']}, '
+                                                            '${city['country']}'
+                                                          : '${city['name']}, '
+                                                            '${city['country']}';
+
+                                                  return ListTile(
+                                                    leading: const Icon(
+                                                      Icons.location_city,
+                                                    ),
+                                                    title: Text(label),
+                                                    onTap: () {
+                                                      _selectNotificationCity(
+                                                          city);
+
+                                                      setLocationModalState(
+                                                          () {});
+
+                                                      Navigator.pop(context);
+                                                    },
+                                                  );
+                                                }).toList(),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               );
                             },
                           );
