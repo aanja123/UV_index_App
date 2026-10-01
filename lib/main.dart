@@ -18,7 +18,12 @@ void callbackDispatcher() {
     print('Background task started: $task');
 
     try {
-      await runDailyUVCheck();
+      final shouldScheduleNext = await runDailyUVCheck();
+
+      if (shouldScheduleNext) {
+        await scheduleNextDailyUVCheck();
+      }
+
       return Future.value(true);
     } catch (e) {
       print('Background task error: $e');
@@ -27,7 +32,7 @@ void callbackDispatcher() {
   });
 }
 
-Future<void> runDailyUVCheck() async {
+Future<bool> runDailyUVCheck() async {
   print('Starting daily UV check...');
 
   final prefs = await SharedPreferences.getInstance();
@@ -37,7 +42,7 @@ Future<void> runDailyUVCheck() async {
 
   if (!notificationsEnabled) {
     print('Notifications are disabled.');
-    return;
+    return false;
   }
 
   final latitude =
@@ -52,7 +57,7 @@ Future<void> runDailyUVCheck() async {
 
   if (latitude == null || longitude == null) {
     print('Notification location is not configured.');
-    return;
+    return false;
   }
 
   print(
@@ -151,6 +156,7 @@ Future<void> runDailyUVCheck() async {
   );
 
   print('Background UV notification shown.');
+  return true;
 }
 
 void main() async {
@@ -261,6 +267,45 @@ Future<void> scheduleDailyUVCheck(
 
   print('Scheduling daily UV check for: $nextRun');
   print('Initial delay: $delay');
+
+  await Workmanager().registerOneOffTask(
+    uvDailyTaskName,
+    uvDailyTaskName,
+    initialDelay: delay,
+  );
+}
+
+Future<void> scheduleNextDailyUVCheck() async {
+  final prefs = await SharedPreferences.getInstance();
+
+  final notificationsEnabled =
+      prefs.getBool('notificationsEnabled') ?? false;
+
+  if (!notificationsEnabled) {
+    print('Notifications are disabled. Not scheduling next check.');
+    return;
+  }
+
+  final hour =
+      prefs.getInt('notificationHour') ?? 9;
+
+  final minute =
+      prefs.getInt('notificationMinute') ?? 0;
+
+  final now = DateTime.now();
+
+  var nextRun = DateTime(
+    now.year,
+    now.month,
+    now.day + 1,
+    hour,
+    minute,
+  );
+
+  final delay = nextRun.difference(now);
+
+  print('Scheduling next daily UV check for: $nextRun');
+  print('Next delay: $delay');
 
   await Workmanager().registerOneOffTask(
     uvDailyTaskName,
